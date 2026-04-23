@@ -1,10 +1,10 @@
 name: Build Lizard Binaries
 
 on:
-  workflow_dispatch: # 允许手动触发
+  workflow_dispatch:
   push:
     tags:
-      - 'v*' # 当推送标签时自动触发，例如 v1.0.0
+      - 'v*'
 
 jobs:
   build:
@@ -13,10 +13,10 @@ jobs:
         include:
           - platform: linux/amd64
             arch_suffix: x86_64
-            artifact_name: lizard-linux-${{ matrix.arch_suffix }}-debian11
+            artifact_name: lizard-linux-x86_64-debian11
           - platform: linux/arm64/v8
             arch_suffix: arm64
-            artifact_name: lizard-linux-${{ matrix.arch_suffix }}-debian11
+            artifact_name: lizard-linux-arm64-debian11
 
     runs-on: ubuntu-latest
 
@@ -32,17 +32,11 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # 构建 Docker 镜像并在指定平台上运行构建过程
       - name: Build with Docker (Debian 11)
-        env:
-          TARGETPLATFORM: ${{ matrix.platform }}
-          ARTIFACT_NAME: ${{ matrix.artifact_name }}
         run: |
-          # --- Start of Dockerfile Content ---
-          # We write the Dockerfile content directly here using heredoc
-          cat << 'EOF' > Dockerfile.debug
+          cat << 'EOF' > Dockerfile.build
           ARG TARGETPLATFORM
-          FROM --platform=$TARGETPLATFORM debian:bullseye-slim
+          FROM --platform=${TARGETPLATFORM} debian:bullseye-slim
 
           RUN apt-get update && \
               apt-get install -y --no-install-recommends \
@@ -60,68 +54,56 @@ jobs:
           RUN python3.11 -m pip install nuitka zstandard && \
               python3.11 -m pip install .
 
-          # Print working directory contents before building
-          RUN echo "Contents of /app before build:" && ls -la /app/
-
-          # Build the binary
           RUN python3.11 -m nuitka \
               --standalone \
               --onefile \
               --include-package=lizard \
               --assume-yes-for-downloads \
-              --output-filename="${ARTIFACT_NAME}" \
+              --output-filename=lizard \
               lizard.py
 
-          # Print working directory contents after building
-          RUN echo "Contents of /app after build:" && ls -la /app/
+          RUN chmod +x /app/lizard && \
+              test -f /app/lizard && echo "✓ Binary created successfully" || (echo "✗ Binary creation failed" && exit 1)
 
-          # Ensure the binary has execute permissions
-          RUN chmod +x "${ARTIFACT_NAME}"
-
-          # Verify the binary exists and its permissions
-          RUN test -f "${ARTIFACT_NAME}" && echo "Binary ${ARTIFACT_NAME} exists." || (echo "ERROR: Binary ${ARTIFACT_NAME} does NOT exist!" && exit 1)
-          RUN stat -c "%a %n" "${ARTIFACT_NAME}"
-
-          # Optional: Check glibc version inside the container (should be old)
-          # RUN ldd --version
-
-          CMD ["./${ARTIFACT_NAME}"]
+          CMD ["./lizard"]
           EOF
-          # --- End of Dockerfile Content ---
 
-          # Build the image
           docker build \
               --platform ${{ matrix.platform }} \
-              --build-arg ARTIFACT_NAME="${{ matrix.artifact_name }}" \
-              -t lizard-builder-debug:${{ matrix.arch_suffix }} \
-              -f Dockerfile.debug .
+              -t lizard-builder:${{ matrix.arch_suffix }} \
+              -f Dockerfile.build .
 
-          # Create a temporary container and copy the binary
-          CONTAINER_ID=$(docker create lizard-builder-debug:${{ matrix.arch_suffix }})
-          echo "Created container ID: $CONTAINER_ID"
-          docker cp ${CONTAINER_ID}:/app/${{ matrix.artifact_name }} ./
-          echo "Copied ${{ matrix.artifact_name }} from container."
+          CONTAINER_ID=$(docker create lizard-builder:${{ matrix.arch_suffix }})
+          echo "Container ID: $CONTAINER_ID"
+          docker cp ${CONTAINER_ID}:/app/lizard ./${{ matrix.artifact_name }}
+          echo "✓ Binary copied successfully"
           docker rm -v ${CONTAINER_ID} > /dev/null
 
-      # Debug step: List files in the current directory before uploading
-      - name: List files before upload
+      - name: Verify Binary
         run: |
-          echo "Listing files in current directory:"
-          ls -la
-          echo "Looking for file: ${{ matrix.artifact_name }}"
           if [ -f "${{ matrix.artifact_name }}" ]; then
-            echo "File '${{ matrix.artifact_name }}' found! Size: $(stat -c%s ${{ matrix.artifact_name }}) bytes"
-            # Optional: Show file type
-            file ${{ matrix.artifact_name }}
+            echo "✓ Binary found: ${{ matrix.artifact_name }}"
+            file "${{ matrix.artifact_name }}"
+            stat -c "Size: %s bytes" "${{ matrix.artifact_name }}"
           else
-            echo "ERROR: File '${{ matrix.artifact_name }}' was NOT found!"
+            echo "✗ Binary not found!"
+            ls -la
             exit 1
           fi
 
-      # Upload the binary as an artifact
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
           path: ${{ matrix.artifact_name }}
           retention-days: 30
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: ${{ matrix.artifact_name }}
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

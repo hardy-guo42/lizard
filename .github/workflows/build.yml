@@ -32,10 +32,11 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build with Docker (CentOS 7 - glibc 2.17)
+      - name: Prepare Repository Configuration
         run: |
-          # Create repository configuration first
-          cat << 'REPO_EOF' > CentOS-Base.repo
+          # Create repository configuration
+          mkdir -p docker-context
+          cat << 'REPO_EOF' > docker-context/CentOS-Base.repo
           [base]
           name=CentOS-$releasever - Base
           baseurl=http://vault.centos.org/centos/$releasever/os/$basearch/
@@ -63,7 +64,7 @@ jobs:
           REPO_EOF
 
           # Create Dockerfile
-          cat << 'EOF' > Dockerfile.build
+          cat << 'EOF' > docker-context/Dockerfile
           ARG TARGETPLATFORM
           FROM --platform=${TARGETPLATFORM} centos:7
 
@@ -76,18 +77,26 @@ jobs:
           # Import GPG key
           RUN curl -o /etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-7 https://www.centos.org/keys/RPM-GPG-KEY-CentOS-7
 
-          # Update packages and install required tools
+          # Fix locale settings and install basic tools
           RUN yum clean all && \
               yum update -y && \
-              yum install -y centos-release-scl && \
+              yum install -y deltarpm && \
+              yum update -y && \
+              yum install -y \
+                  centos-release-scl \
+                  info \
+                  texinfo && \
               yum install -y \
                   rh-python36 \
                   rh-python36-python-devel \
                   gcc \
-                  make && \
+                  make \
+                  which \
+                  findutils && \
               yum clean all && \
               rm -rf /var/cache/yum
 
+          # Enable SCL and install Python dependencies
           RUN scl enable rh-python36 'pip install --upgrade pip setuptools wheel' && \
               scl enable rh-python36 'pip install pyinstaller pygments pathspec'
 
@@ -99,17 +108,22 @@ jobs:
 
           FROM --platform=${TARGETPLATFORM} centos:7
           COPY --from=0 /build/dist/lizard /usr/local/bin/lizard
-          RUN chmod +x /usr/local/bin/lizard && ldd /usr/local/bin/lizard
+          RUN chmod +x /usr/local/bin/lizard
+          CMD ["/usr/local/bin/lizard"]
           EOF
 
-          # Build the Docker image
+          # Copy source code to docker context
+          cp -r . docker-context/src
+          cd docker-context && mv src/* . && rmdir src
+
+      - name: Build with Docker (CentOS 7 - glibc 2.17)
+        run: |
           docker buildx build \
             --platform ${{ matrix.platform }} \
             --tag lizard-builder:${{ matrix.arch_suffix }} \
-            -f Dockerfile.build \
+            -f docker-context/Dockerfile \
             --output type=docker \
-            --build-arg TARGETPLATFORM=${{ matrix.platform }} \
-            .
+            docker-context
 
       - name: Extract Binary from Docker Image
         run: |

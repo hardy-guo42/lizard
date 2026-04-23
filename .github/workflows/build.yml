@@ -34,8 +34,10 @@ jobs:
 
       - name: Prepare Repository Configuration
         run: |
-          # Create repository configuration
+          # Create docker build context directory
           mkdir -p docker-context
+          
+          # Create repository configuration
           cat << 'REPO_EOF' > docker-context/CentOS-Base.repo
           [base]
           name=CentOS-$releasever - Base
@@ -109,12 +111,10 @@ jobs:
           FROM --platform=${TARGETPLATFORM} centos:7
           COPY --from=0 /build/dist/lizard /usr/local/bin/lizard
           RUN chmod +x /usr/local/bin/lizard
-          CMD ["/usr/local/bin/lizard"]
           EOF
 
-          # Copy source code to docker context
-          cp -r . docker-context/src
-          cd docker-context && mv src/* . && rmdir src
+          # Copy all source files to docker context
+          rsync -av --exclude='docker-context/' . docker-context/ --exclude='docker-context'
 
       - name: Build with Docker (CentOS 7 - glibc 2.17)
         run: |

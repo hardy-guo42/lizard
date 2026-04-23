@@ -1,168 +1,59 @@
-name: Build Lizard Binaries
+name: Build Lizard Binaries (Docker-based glibc 2.17 Compatible)
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: # 允许手动触发
   push:
     tags:
-      - 'v*'
+      - 'v*' # 当推送标签时自动触发，例如 v1.0.0
 
 jobs:
-  build:
-    strategy:
-      matrix:
-        include:
-          - platform: linux/amd64
-            arch_suffix: x86_64
-            artifact_name: lizard-linux-x86_64-centos7
-          - platform: linux/arm64/v8
-            arch_suffix: arm64
-            artifact_name: lizard-linux-arm64-centos7
-
-    runs-on: ubuntu-latest
-
+  build_windows:
+    runs-on: windows-2022
     steps:
-      - name: Checkout Source Code
-        uses: actions/checkout@v4
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+      - uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
-          platforms: ${{ matrix.platform }}
+          python-version: '3.11'
+      - name: Install Dependencies
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          pip install nuitka zstandard
+          pip install .
+      - name: Build Binary
+        shell: bash
+        run: |
+          python -m nuitka --standalone --onefile --include-package=lizard --output-filename=lizard-windows-x64.exe lizard.py
+      - name: Upload Windows Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lizard-windows-x64.exe
+          path: lizard-windows-x64.exe
+
+  build_linux_docker:
+    runs-on: ubuntu-22.04 # 使用一个支持 Docker 的 runner
+    steps:
+      - uses: actions/checkout@v4
+      
+      # 复制 Dockerfile.build 到根目录（如果它不在那里）
+      # - name: Prepare Dockerfile
+      #   run: cp Dockerfile.build ./Dockerfile # 如果你把 Dockerfile 放在别处
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Prepare Repository Configuration
+      - name: Build with Docker
         run: |
-          # Create docker build context directory
-          mkdir -p docker-context
-          
-          # Create repository configuration
-          cat << 'REPO_EOF' > docker-context/CentOS-Base.repo
-          [base]
-          name=CentOS-$releasever - Base
-          baseurl=http://vault.centos.org/centos/$releasever/os/$basearch/
-          gpgcheck=1
-          gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-7
-
-          [updates]
-          name=CentOS-$releasever - Updates
-          baseurl=http://vault.centos.org/centos/$releasever/updates/$basearch/
-          gpgcheck=1
-          gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-7
-
-          [extras]
-          name=CentOS-$releasever - Extras
-          baseurl=http://vault.centos.org/centos/$releasever/extras/$basearch/
-          gpgcheck=1
-          gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-7
-          
-          [centosplus]
-          name=CentOS-$releasever - Plus
-          baseurl=http://vault.centos.org/centos/$releasever/centosplus/$basearch/
-          gpgcheck=1
-          enabled=0
-          gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-7
-          REPO_EOF
-
-          # Create Dockerfile
-          cat << 'EOF' > docker-context/Dockerfile
-          ARG TARGETPLATFORM
-          FROM --platform=${TARGETPLATFORM} centos:7
-
-          # Verify glibc version is 2.17
-          RUN ldd --version | head -1
-
-          # Copy repository configuration
-          COPY CentOS-Base.repo /etc/yum.repos.d/
-
-          # Import GPG key
-          RUN curl -o /etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-7 https://www.centos.org/keys/RPM-GPG-KEY-CentOS-7
-
-          # Fix locale settings and install basic tools
-          RUN yum clean all && \
-              yum update -y && \
-              yum install -y deltarpm && \
-              yum update -y && \
-              yum install -y \
-                  centos-release-scl \
-                  info \
-                  texinfo && \
-              yum install -y \
-                  rh-python36 \
-                  rh-python36-python-devel \
-                  gcc \
-                  make \
-                  which \
-                  findutils && \
-              yum clean all && \
-              rm -rf /var/cache/yum
-
-          # Enable SCL and install Python dependencies
-          RUN scl enable rh-python36 'pip install --upgrade pip setuptools wheel' && \
-              scl enable rh-python36 'pip install pyinstaller pygments pathspec'
-
-          WORKDIR /build
-          COPY . .
-
-          RUN scl enable rh-python36 'python setup.py install'
-          RUN scl enable rh-python36 'pyinstaller --onefile --name=lizard --distpath=/build/dist lizard.py'
-
-          FROM --platform=${TARGETPLATFORM} centos:7
-          COPY --from=0 /build/dist/lizard /usr/local/bin/lizard
-          RUN chmod +x /usr/local/bin/lizard
-          EOF
-
-          # Copy all source files to docker context
-          rsync -av --exclude='docker-context/' . docker-context/ --exclude='docker-context'
-
-      - name: Build with Docker (CentOS 7 - glibc 2.17)
-        run: |
-          docker buildx build \
-            --platform ${{ matrix.platform }} \
-            --tag lizard-builder:${{ matrix.arch_suffix }} \
-            -f docker-context/Dockerfile \
-            --output type=docker \
-            docker-context
-
-      - name: Extract Binary from Docker Image
-        run: |
+          docker build -f Dockerfile.build -t lizard-builder .
+          # 从构建成功的容器中复制生成的二进制文件
           mkdir -p ./dist
-          docker run --rm \
-            -v $(pwd)/dist:/output \
-            lizard-builder:${{ matrix.arch_suffix }} \
-            sh -c 'cp /usr/local/bin/lizard /output/lizard-linux-${{ matrix.arch_suffix }}'
+          docker create --name temp_container lizard-builder
+          docker cp temp_container:/app/lizard-linux-x64-glibc217 ./dist/
+          docker rm -f temp_container
 
-      - name: Verify Binary Compatibility
-        run: |
-          file ./dist/lizard-linux-${{ matrix.arch_suffix }}
-          ldd ./dist/lizard-linux-${{ matrix.arch_suffix }} || echo "Binary is statically linked or uses non-standard libc"
-
-      - name: Upload Artifact
+      - name: Upload Linux Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: lizard-linux_${{ matrix.arch_suffix }}-binary
-          path: ./dist/lizard-linux-${{ matrix.arch_suffix }}
-          retention-days: 30
-
-  release:
-    needs: build
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
-
-    steps:
-      - name: Download All Artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: ./artifacts
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v1
-        with:
-          files: |
-            ./artifacts/lizard-linux_x86-binary/lizard-linux-x86_64
-            ./artifacts/lizard-linux_arm-binary/lizard-linux-arm64
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: lizard-linux-x64-glibc217
+          path: dist/lizard-linux-x64-glibc217

@@ -41,28 +41,11 @@ jobs:
           # Verify glibc version is 2.17
           RUN ldd --version | head -1
 
-          # 替换为 vault.centos.org 并使用 Python 3.6（官方支持）
-          RUN rm -f /etc/yum.repos.d/*.repo && \
-              cat > /etc/yum.repos.d/CentOS-Base.repo << 'REPO'
-          [base]
-          name=CentOS-$releasever - Base
-          baseurl=http://vault.centos.org/centos/$releasever/os/$basearch/
-          gpgcheck=1
-          gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-7
+          # Replace CentOS repos with vault mirrors since CentOS 7 has reached EOL
+          RUN sed -i 's/mirrorlist/#mirrorlist/g' /etc/yum.repos.d/CentOS-*.repo && \
+              sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-*.repo
 
-          [updates]
-          name=CentOS-$releasever - Updates
-          baseurl=http://vault.centos.org/centos/$releasever/updates/$basearch/
-          gpgcheck=1
-          gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-7
-
-          [extras]
-          name=CentOS-$releasever - Extras
-          baseurl=http://vault.centos.org/centos/$releasever/extras/$basearch/
-          gpgcheck=1
-          gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-7
-          REPO
-
+          # Update packages and install required tools
           RUN yum update -y && \
               yum install -y centos-release-scl && \
               yum install -y \
@@ -70,7 +53,8 @@ jobs:
                   rh-python36-python-devel \
                   gcc \
                   make && \
-              yum clean all
+              yum clean all && \
+              rm -rf /var/cache/yum
 
           RUN scl enable rh-python36 'pip install --upgrade pip setuptools wheel' && \
               scl enable rh-python36 'pip install pyinstaller pygments pathspec'

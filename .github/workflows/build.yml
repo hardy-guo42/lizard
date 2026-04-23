@@ -41,9 +41,9 @@ jobs:
           # Verify glibc version is 2.17
           RUN ldd --version | head -1
 
-          # 替换为 vault.centos.org 并使用 Python 3.9（官方支持）
+          # 替换为 vault.centos.org 并使用 Python 3.6（官方支持）
           RUN rm -f /etc/yum.repos.d/*.repo && \
-              cat > /etc/yum.repos.d/CentOS-Base.repo << 'REPO' && \
+              cat > /etc/yum.repos.d/CentOS-Base.repo << 'REPO'
           [base]
           name=CentOS-$releasever - Base
           baseurl=http://vault.centos.org/centos/$releasever/os/$basearch/
@@ -62,14 +62,17 @@ jobs:
           gpgcheck=1
           gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-7
           REPO
-              yum update -y && \
+
+          RUN yum update -y && \
               yum install -y centos-release-scl && \
               yum install -y \
                   rh-python36 \
                   rh-python36-python-devel \
                   gcc \
                   make && \
-              scl enable rh-python36 'pip install --upgrade pip setuptools wheel' && \
+              yum clean all
+
+          RUN scl enable rh-python36 'pip install --upgrade pip setuptools wheel' && \
               scl enable rh-python36 'pip install pyinstaller pygments pathspec'
 
           WORKDIR /build

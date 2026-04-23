@@ -1,0 +1,124 @@
+name: Build Lizard Binaries (Debian 11 Compatible: x86 & ARM)
+
+on:
+  workflow_dispatch: # 允许手动触发
+  push:
+    tags:
+      - 'v*' # 当推送标签时自动触发，例如 v1.0.0
+
+jobs:
+  build:
+    # 定义矩阵，用于交叉编译不同架构
+    strategy:
+      matrix:
+        include:
+          # Linux x86_64 (amd64) on Debian 11
+          - platform: linux/amd64
+            arch_suffix: x86_64
+            artifact_name: lizard-linux-${{ matrix.arch_suffix }}-debian11
+          # Linux ARM64 (aarch64) on Debian 11
+          - platform: linux/arm64/v8
+            arch_suffix: arm64
+            artifact_name: lizard-linux-${{ matrix.arch_suffix }}-debian11
+          # 如果需要 ARMv7 (32-bit), 可以添加:
+          # - platform: linux/arm/v7
+          #   arch_suffix: armv7
+          #   artifact_name: lizard-linux-${{ matrix.arch_suffix }}-debian11
+
+    runs-on: ubuntu-latest # 使用标准的 Ubuntu runner，它支持 Docker
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      # 设置 QEMU 以支持在 amd64 runner 上模拟 ARM 架构
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: ${{ matrix.platform }}
+
+      # 设置 Docker Buildx，支持多架构构建
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # 构建 Docker 镜像并在指定平台上运行构建过程
+      - name: Build with Docker (Debian 11)
+        env:
+          # 将矩阵变量传递给 Docker 构建上下文
+          TARGETPLATFORM: ${{ matrix.platform }}
+          ARTIFACT_NAME: ${{ matrix.artifact_name }}
+        run: |
+          # 使用 here document 创建 Dockerfile
+          cat << 'EOF' > Dockerfile.debian11
+          ARG TARGETPLATFORM
+          FROM --platform=$TARGETPLATFORM debian:bullseye-slim
+
+          # 更新包列表并安装必要的构建工具、Python 3.11 及其开发包
+          # 注意：Debian 11 的默认 Python 是 3.9，需要手动安装 3.11
+          RUN apt-get update && \
+              apt-get install -y --no-install-recommends \
+                  python3.11 python3.11-dev python3.11-distutils \
+                  python3-pip python3-setuptools \
+                  build-essential gcc g++ make wget ca-certificates && \
+              rm -rf /var/lib/apt/lists/*
+
+          # 升级 pip 并安装项目依赖
+          RUN python3.11 -m pip install --upgrade pip setuptools wheel
+
+          # 设置工作目录
+          WORKDIR /app
+
+          # 将项目源码复制到容器中
+          COPY . .
+
+          # 安装项目依赖和 Nuitka
+          RUN python3.11 -m pip install nuitka zstandard && \
+              python3.11 -m pip install .
+
+          # 构建二进制文件
+          # 使用 python3.11 调用 nuitka
+          # --standalone 和 --onefile 是关键参数
+          # --include-package=lizard 确保所有必要包被打包
+          # --output-filename 指定输出文件名
+          RUN python3.11 -m nuitka \
+              --standalone \
+              --onefile \
+              --include-package=lizard \
+              --assume-yes-for-downloads \
+              --output-filename="${ARTIFACT_NAME}" \
+              lizard.py
+
+          # 确保生成的二进制文件有执行权限
+          RUN chmod +x "${ARTIFACT_NAME}"
+
+          # 验证生成的二进制文件是否依赖于较新的 glibc (非必需，但有助于调试)
+          # RUN ldd "${ARTIFACT_NAME}" || echo "ldd check skipped for potentially static binary"
+
+          # 设置容器默认运行的命令为执行生成的二进制文件
+          CMD ["./${ARTIFACT_NAME}"]
+          EOF
+
+          # 构建 Docker 镜像，使用 --load 将结果加载到本地 Docker daemon
+          # 使用 --platform 指定目标架构
+          # 使用 --build-arg 传递 ARTIFACT_NAME 给 Dockerfile
+          docker build \
+              --platform ${{ matrix.platform }} \
+              --build-arg ARTIFACT_NAME="${{ matrix.artifact_name }}" \
+              -t lizard-builder:${{ matrix.arch_suffix }} \
+              -f Dockerfile.debian11 .
+
+          # 从构建好的镜像中提取二进制文件
+          # 创建一个临时容器
+          CONTAINER_ID=$(docker create lizard-builder:${{ matrix.arch_suffix }})
+          # 将二进制文件复制到主机的工作目录
+          docker cp ${CONTAINER_ID}:/app/${{ matrix.artifact_name }} ./
+          # 清理临时容器
+          docker rm -v ${CONTAINER_ID} > /dev/null
+
+      # 上传构建好的二进制文件作为工件
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_name }}
+          retention-days: 30 # 可选：设置工件保留天数

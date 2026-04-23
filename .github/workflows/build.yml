@@ -41,27 +41,37 @@ jobs:
           # Verify glibc version is 2.17
           RUN ldd --version | head -1
 
+          # 修复 yum 仓库配置，启用 SCL
           RUN sed -i 's/mirrorlist/#mirrorlist/g' /etc/yum.repos.d/CentOS-*.repo && \
               sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-*.repo && \
               yum update -y && \
+              yum install -y centos-release-scl && \
               yum install -y \
-                  epel-release && \
-              yum install -y \
-                  python3.11 python3.11-devel \
+                  rh-python311 \
+                  rh-python311-python-devel \
                   gcc gcc-c++ make wget ca-certificates && \
               yum clean all && \
               rm -rf /var/cache/yum
 
-          RUN python3.11 -m pip install --upgrade pip setuptools wheel
+          # 配置 Python 3.11 环境变量
+          ENV SCLLIBRARY=/opt/rh/rh-python311/root
+          ENV PATH=${SCLLIBRARY}/usr/bin:$PATH
+          ENV LD_LIBRARY_PATH=${SCLLIBRARY}/usr/lib64:$LD_LIBRARY_PATH
+          ENV PKG_CONFIG_PATH=${SCLLIBRARY}/usr/lib64/pkgconfig:$PKG_CONFIG_PATH
+
+          # 验证 Python 和 pip
+          RUN python3 --version && \
+              python3 -m pip --version && \
+              python3 -m pip install --upgrade pip setuptools wheel
 
           WORKDIR /app
 
           COPY . .
 
-          RUN python3.11 -m pip install nuitka zstandard && \
-              python3.11 -m pip install .
+          RUN python3 -m pip install nuitka zstandard && \
+              python3 -m pip install .
 
-          RUN python3.11 -m nuitka \
+          RUN python3 -m nuitka \
               --standalone \
               --onefile \
               --include-package=lizard \

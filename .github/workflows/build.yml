@@ -1,9 +1,4 @@
-/**
- * 由 FreeCodeFormat.com 格式化
- * 专业开发者在线工具
- */
-
-name: Build Lizard Binaries (Debian 11 Compatible: x86 & ARM) - Debug
+name: Build Lizard Binaries
 
 on:
   workflow_dispatch: # 允许手动触发

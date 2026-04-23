@@ -34,6 +34,35 @@ jobs:
 
       - name: Build with Docker (CentOS 7 - glibc 2.17)
         run: |
+          # Create repository configuration first
+          cat << 'REPO_EOF' > CentOS-Base.repo
+          [base]
+          name=CentOS-$releasever - Base
+          baseurl=http://vault.centos.org/centos/$releasever/os/$basearch/
+          gpgcheck=1
+          gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-7
+
+          [updates]
+          name=CentOS-$releasever - Updates
+          baseurl=http://vault.centos.org/centos/$releasever/updates/$basearch/
+          gpgcheck=1
+          gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-7
+
+          [extras]
+          name=CentOS-$releasever - Extras
+          baseurl=http://vault.centos.org/centos/$releasever/extras/$basearch/
+          gpgcheck=1
+          gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-7
+          
+          [centosplus]
+          name=CentOS-$releasever - Plus
+          baseurl=http://vault.centos.org/centos/$releasever/centosplus/$basearch/
+          gpgcheck=1
+          enabled=0
+          gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-7
+          REPO_EOF
+
+          # Create Dockerfile
           cat << 'EOF' > Dockerfile.build
           ARG TARGETPLATFORM
           FROM --platform=${TARGETPLATFORM} centos:7
@@ -41,12 +70,15 @@ jobs:
           # Verify glibc version is 2.17
           RUN ldd --version | head -1
 
-          # Replace CentOS repos with vault mirrors since CentOS 7 has reached EOL
-          RUN sed -i 's/mirrorlist/#mirrorlist/g' /etc/yum.repos.d/CentOS-*.repo && \
-              sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-*.repo
+          # Copy repository configuration
+          COPY CentOS-Base.repo /etc/yum.repos.d/
+
+          # Import GPG key
+          RUN curl -o /etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-7 https://www.centos.org/keys/RPM-GPG-KEY-CentOS-7
 
           # Update packages and install required tools
-          RUN yum update -y && \
+          RUN yum clean all && \
+              yum update -y && \
               yum install -y centos-release-scl && \
               yum install -y \
                   rh-python36 \
@@ -70,11 +102,13 @@ jobs:
           RUN chmod +x /usr/local/bin/lizard && ldd /usr/local/bin/lizard
           EOF
 
+          # Build the Docker image
           docker buildx build \
             --platform ${{ matrix.platform }} \
             --tag lizard-builder:${{ matrix.arch_suffix }} \
             -f Dockerfile.build \
             --output type=docker \
+            --build-arg TARGETPLATFORM=${{ matrix.platform }} \
             .
 
       - name: Extract Binary from Docker Image

@@ -1,0 +1,25 @@
+# 使用一个 glibc 版本较老的基础镜像，例如 CentOS 7 或 RHEL 7
+# almalinux:7 是 RHEL 7 的一个现代替代品，社区维护活跃
+FROM almalinux:7
+
+# 更新系统并安装必要的构建工具和 Python 3.11
+RUN yum update -y && \
+    yum install -y epel-release && \
+    yum install -y python311 python311-pip python311-devel gcc gcc-c++ make
+
+# 设置工作目录
+WORKDIR /app
+
+# 将项目源码复制到容器中
+COPY . .
+
+# 安装项目依赖和 Nuitka
+RUN pip3.11 install nuitka zstandard && \
+    pip3.11 install .
+
+# 构建二进制文件，注意指定输出文件名
+# 这里假设主入口文件是 lizard.py
+RUN python3.11 -m nuitka --standalone --onefile --include-package=lizard --output-filename=lizard-linux-x64-glibc217 lizard.py
+
+# 默认命令（当容器运行时执行什么，这里我们只是想获取生成的文件）
+# CMD ["./lizard-linux-x64-glibc217"]
